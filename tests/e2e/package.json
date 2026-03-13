@@ -1,0 +1,15 @@
+{
+  "name": "copilot-go-advanced-e2e",
+  "version": "1.0.0",
+  "description": "Playwright e2e tests for the Go weather app dashboard",
+  "private": true,
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:ui": "npx playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.41.0",
+    "@types/node": "^25.5.0"
+  }
+}

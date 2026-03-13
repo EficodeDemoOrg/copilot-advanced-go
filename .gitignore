@@ -1,0 +1,24 @@
+# Binaries
+bin/
+
+# Environment variables
+.env
+
+# Swagger generated files
+docs/
+
+# Air temp files
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Node (Playwright)
+tests/e2e/node_modules/
+tests/e2e/playwright-report/
+tests/e2e/test-results/

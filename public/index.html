@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weather App</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <header class="header">
+    <h1 class="header__title">&#9925; Weather App</h1>
+    <p class="header__subtitle">Real-time weather data &amp; forecasts</p>
+  </header>
+
+  <main class="main">
+    <!-- Search Section -->
+    <section class="search" aria-label="Weather search">
+      <form class="search__form" id="search-form">
+        <div class="search__fields">
+          <label class="search__label">
+            Latitude
+            <input type="number" id="lat" class="search__input" step="any" placeholder="51.51" required>
+          </label>
+          <label class="search__label">
+            Longitude
+            <input type="number" id="lon" class="search__input" step="any" placeholder="-0.13" required>
+          </label>
+          <label class="search__label">
+            Units
+            <select id="search-units" class="search__select">
+              <option value="celsius" selected>Celsius</option>
+              <option value="fahrenheit">Fahrenheit</option>
+              <option value="kelvin">Kelvin</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit" class="search__button" id="search-button">Search</button>
+      </form>
+    </section>
+
+    <div class="content">
+      <!-- Weather Results -->
+      <div class="content__weather">
+        <!-- Error Message -->
+        <div id="error-message" role="alert" class="error" hidden></div>
+        <!-- Current Weather Card -->
+        <section class="card card--current" id="current-weather" aria-label="Current weather" hidden>
+          <h2 class="card__title" id="current-location">—</h2>
+          <div class="card__body">
+            <div class="card__main">
+              <img class="card__icon" id="current-icon" src="" alt="Weather icon">
+              <span class="card__temperature" id="current-temp">—</span>
+            </div>
+            <div class="card__details">
+              <p class="card__detail">Feels like: <strong id="current-feels-like">—</strong></p>
+              <p class="card__detail">Humidity: <strong id="current-humidity">—</strong>%</p>
+              <p class="card__detail">Pressure: <strong id="current-pressure">—</strong> hPa</p>
+              <p class="card__detail">Wind: <strong id="current-wind">—</strong></p>
+              <p class="card__detail card__description" id="current-description">—</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Forecast Chart -->
+        <section class="card card--forecast" id="forecast-section" aria-label="Forecast">
+          <h2 class="card__title">5-Day Forecast</h2>
+          <div class="card__chart-container">
+            <canvas id="forecast-chart"></canvas>
+          </div>
+        </section>
+
+        <!-- Weather Alerts -->
+        <section class="card card--alerts" id="alerts-section" aria-label="Weather alerts" hidden>
+          <h2 class="card__title">Weather Alerts</h2>
+          <div id="alerts-list" class="alerts"></div>
+        </section>
+      </div>
+
+      <!-- Saved Locations Sidebar -->
+      <aside class="sidebar" id="saved-locations" aria-label="Saved locations">
+        <h2 class="sidebar__title">Saved Locations</h2>
+        <form class="sidebar__form" id="location-form">
+          <input type="text" id="location-name" class="sidebar__input" placeholder="Location name" required maxlength="200">
+          <input type="number" id="location-lat" class="sidebar__input" step="any" min="-90" max="90" placeholder="Latitude" required>
+          <input type="number" id="location-lon" class="sidebar__input" step="any" min="-180" max="180" placeholder="Longitude" required>
+          <button type="submit" class="sidebar__button">Save Location</button>
+        </form>
+        <ul class="sidebar__list" id="locations-list"></ul>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>Powered by <a href="https://openweathermap.org/" target="_blank" rel="noopener">OpenWeatherMap</a></p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
