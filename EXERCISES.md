@@ -446,3 +446,212 @@ For each skill you identify, create the directory, `SKILL.md`, and any scripts. 
 - Skills are loaded based on relevance, not guaranteed to run. How do you increase the likelihood that agents use them? (Hint: explicit references in agent instructions, and naming the skill in the prompt.)
 - What's the difference between a skill and a hook for enforcing behavior? When would you choose one over the other?
 - How do you test that a skill's structured output is actually more reliable than the LLM's interpretation?
+
+---
+
+## Exercise 8: QA Agent -- Prompt-Driven Test Generation (Stretch)
+
+**Goal:** Build a dedicated **QA Agent** that receives a feature description and writes tests -- and *only* tests. It never touches production code. This inverts the Implementer's role and tests whether you can enforce strict file-boundary restrictions.
+
+### What to build
+
+Create a new `.agent.md` in `.github/agents/` for the QA Agent. Its core behavior:
+
+1. **Receive a feature description** (or a backlog item from the PM).
+2. **Research existing test patterns** -- delegate to a Researcher subagent or use read-only tools to find existing tests in the relevant `internal/<package>/` directories, understand factory helpers in `internal/testhelpers/`, and identify coverage gaps.
+3. **Generate tests only** -- table-driven tests (idiomatic Go), edge cases, error paths, and negative tests. Tests go in `internal/<package>/<file>_test.go` alongside the source. Follow the `TestSubject_Condition` naming convention with `testify/assert` and `testify/require`.
+4. **Run the tests** using the `run-tests` skill. New tests should *fail* (the feature isn't implemented yet) -- that's expected and correct. Existing tests must still pass.
+5. **Report back** with the list of new test files, test function names, and which ones fail (expected) vs. pass.
+
+### Key design decisions
+
+- **File boundary enforcement.** The QA Agent must only edit `*_test.go` files. Use a `PreToolUse` hook to enforce this -- if the agent tries to edit a non-test file, block it. This is the same pattern as the Test Author split from Exercise 5a, but as a standalone agent.
+- **Coverage skill.** Consider building a skill that runs `go test -coverprofile=coverage.out ./internal/...` and then `go tool cover -func=coverage.out` to produce a structured coverage report. The QA Agent uses this to identify which functions lack test coverage and prioritize accordingly.
+- **Should the QA Agent be a subagent?** It fits naturally into the orchestrated workflow: the Coordinator could invoke the QA Agent *before* the Implementer, producing failing tests that define the acceptance criteria. The Implementer then makes them pass. This is the Test Author + Implementer split from Exercise 5, but with the Test Author replaced by a more capable QA Agent that does its own research.
+
+### Things to try
+
+- Ask the QA Agent to write tests for an existing, already-implemented feature (e.g., unit conversion in `internal/utils/`). Do the generated tests pass? Are they meaningful, or do they duplicate existing coverage?
+- Ask it to write tests for a *new* feature that doesn't exist yet. The tests should fail. Then hand them to the Implementer and see if it can make them pass.
+- Try breaking the file boundary -- prompt the QA Agent to "fix the code so tests pass." Does the `PreToolUse` hook catch it?
+
+### Integration with the orchestrated workflow
+
+If you completed Exercise 5, wire the QA Agent into the Coordinator's workflow:
+
+1. Coordinator receives a feature request.
+2. PM produces a backlog item.
+3. **QA Agent writes failing tests** based on the acceptance criteria.
+4. Implementer writes production code to make the tests pass.
+5. Coordinator verifies all tests pass and reports back.
+
+This creates a true TDD workflow where the agent writing tests is *different* from the agent writing code -- eliminating the risk of the Implementer changing test assertions instead of fixing its implementation.
+
+**Discussion:**
+- How do you ensure the QA Agent writes *meaningful* tests and not just trivial assertions that always pass?
+- What happens when the QA Agent's tests are wrong or untestable? How does the Coordinator handle that failure mode?
+- Should the QA Agent have access to the backlog item template, or should it work from a raw feature description?
+
+---
+
+## Exercise 9: Code Review Agent -- Automated Review Loop (Stretch)
+
+**Goal:** Build a **Code Review Agent** that the Coordinator invokes *after* the Implementer finishes. It reviews the changes, produces a structured verdict, and can trigger a rework loop if the code doesn't meet standards.
+
+### What to build
+
+Create a new `.agent.md` in `.github/agents/` for the Code Review Agent. It should be a **read-only** agent -- it reads code and produces a review, but never edits files itself.
+
+**Core behavior:**
+
+1. **Receive a review request** from the Coordinator, including: which files were created/modified, the original backlog item (acceptance criteria), and optionally a diff.
+2. **Check architectural rules** -- enforce the layered architecture deterministically:
+   - No `net/http` imports in `internal/services/` (services must not know about HTTP).
+   - No business logic in `internal/handlers/` (handlers should only validate input, call services, and return responses).
+   - Domain errors from `internal/apperrors/` are used correctly -- services return domain errors, handlers call `HandleError()`.
+   - New code follows the existing patterns (Gin binding tags for validation, `sync.RWMutex` for repository, etc.).
+3. **Verify acceptance criteria** -- cross-reference the implementation against the backlog item's acceptance criteria. Are they all addressed?
+4. **Produce a structured review** with a verdict:
+
+```
+Verdict: APPROVE | REQUEST_CHANGES
+Issues:
+  - { file, line_range, severity: error|warning|suggestion, description }
+Acceptance criteria coverage:
+  - { criterion, status: met|unmet|partial, evidence }
+Summary: <one paragraph>
+```
+
+### Skills for the reviewer
+
+Build at least one deterministic skill to support the review:
+
+- **`architecture-check`**: A shell script that uses `grep` to scan for architectural violations. For example:
+  - `grep -rn "net/http" internal/services/` to find HTTP imports in the services layer.
+  - `grep -rn "c.JSON\|c.AbortWithStatus" internal/services/` to find Gin response calls in services.
+  - Check that every `*_test.go` file has a corresponding source file.
+  - The script outputs structured JSON: `{ "violations": [{ "file", "line", "rule", "description" }] }`.
+
+This is a perfect skill candidate -- a shell script catches these violations with 100% accuracy, while the LLM might miss them or produce false positives.
+
+### The review loop
+
+The interesting part is wiring this into the Coordinator's workflow to create a **feedback loop**:
+
+1. Implementer finishes and reports completion.
+2. Coordinator invokes the Code Review Agent.
+3. If the verdict is `APPROVE` → done, report success to the human.
+4. If the verdict is `REQUEST_CHANGES` → the Coordinator sends the issues back to the Implementer as a new task, with specific file:line references. The Implementer fixes the issues and reports again. Go to step 2.
+5. **Circuit breaker:** After N review rounds (e.g., 3), stop and escalate to the human instead of looping forever.
+
+This is a non-trivial orchestration pattern -- the Coordinator must manage state across multiple subagent invocations and know when to give up.
+
+### Key design decisions
+
+- **Read-only enforcement.** The reviewer should not edit files. Restrict its tools to read-only (file reading, terminal for running scripts) and no `editFiles`. A `PreToolUse` hook can enforce this as a safety net.
+- **How does the Coordinator pass the "diff" to the reviewer?** Options: (a) list of modified files and let the reviewer read them, (b) run `git diff` in a skill and pass the output, (c) have the Implementer include a change summary in its completion report. Each has trade-offs for context window usage.
+- **Model choice.** The reviewer needs strong reasoning to evaluate code quality but doesn't need code generation capabilities. Consult the [model comparison reference](https://docs.github.com/en/copilot/reference/ai-models/model-comparison) -- a mid-tier model with good analytical capability may be the right choice.
+
+### Things to try
+
+- Run a feature through the full workflow (PM → Implementer → Code Review Agent). Does the reviewer catch real issues?
+- Intentionally introduce an architectural violation (e.g., add an `http.Get()` call in `internal/services/weather_service.go`). Does the `architecture-check` skill catch it?
+- Test the review loop: does the Coordinator successfully send issues back to the Implementer, and does the Implementer fix them?
+- What happens when the reviewer and the Implementer disagree? (The reviewer flags something the Implementer thinks is correct.) How does the Coordinator resolve it?
+
+**Discussion:**
+- How detailed should the review be? Too detailed and it overwhelms the Implementer. Too shallow and it misses real issues.
+- Should the reviewer have access to the test results, or only the source code?  
+- Could the Code Review Agent replace manual code review for certain categories of changes, or is it better as a pre-review filter?
+- What's the right circuit breaker threshold? Too low and real issues don't get fixed. Too high and you burn context (and premium requests) on an unresolvable loop.
+
+---
+
+## Exercise 10: Workflow Observability -- Hook-Based Metrics (Experimental)
+
+**Goal:** Build a hook-based observability layer that logs every agent and tool invocation to a structured JSONL file, and a companion skill that parses the log and reports workflow metrics.
+
+This exercise uses `SubagentStart`, `SubagentStop`, and `PostToolUse` hooks -- lifecycle events that the earlier exercises didn't cover. It turns your orchestrated workflow into something you can measure and debug after the fact.
+
+> **Important:** Hook inputs do **not** include token counts, cost data, or LLM usage metrics. The observability layer tracks *structural* data: which agents ran, which tools they called, how long things took, and what the outcomes were. If you need token-level telemetry, that requires a different mechanism outside of hooks.
+
+### What to build
+
+**Part 1: The logging hooks**
+
+Create `.github/hooks/observability.json` with hooks for three events:
+
+| Event | What to log | Key input fields |
+|-------|------------|-----------------|
+| `SubagentStart` | Agent spawned | `agent_id`, `agent_type`, `timestamp`, `sessionId` |
+| `SubagentStop` | Agent completed | `agent_id`, `agent_type`, `timestamp`, `sessionId` |
+| `PostToolUse` | Tool invocation completed | `tool_name`, `tool_input` (summary, not full content), `timestamp`, `sessionId` |
+
+Each hook calls a shared logging script (e.g., `.github/hooks/scripts/log-event.sh`) that:
+1. Reads the JSON input from stdin.
+2. Extracts the relevant fields.
+3. Appends a single JSON line to `.github/metrics/workflow-log.jsonl` with a consistent schema:
+
+```json
+{"timestamp": "...", "sessionId": "...", "event": "SubagentStart", "agentType": "Implementer", "agentId": "...", "toolName": null, "toolInput": null}
+{"timestamp": "...", "sessionId": "...", "event": "PostToolUse", "agentType": null, "agentId": null, "toolName": "run_in_terminal", "toolInput": "go test ./internal/..."}
+{"timestamp": "...", "sessionId": "...", "event": "SubagentStop", "agentType": "Implementer", "agentId": "...", "toolName": null, "toolInput": null}
+```
+
+**Key implementation details:**
+- Use `jq` for JSON parsing in the script. It's reliable and avoids shell-based JSON parsing pitfalls.
+- Truncate `tool_input` to avoid logging entire file contents -- extract just the command string for `run_in_terminal`, or just the file path for `editFiles`.
+- Create the `.github/metrics/` directory if it doesn't exist.
+- The hooks should return exit code 0 and produce no output that affects agent behavior -- they are purely passive observers.
+
+**Part 2: The `workflow-stats` skill**
+
+Create `.github/skills/workflow-stats/` with:
+- A `SKILL.md` that describes the skill as a workflow metrics reporter.
+- A script (e.g., `parse-metrics.sh`) that reads `.github/metrics/workflow-log.jsonl` and produces a structured summary:
+
+```
+Workflow Metrics (session: <id>)
+================================
+Subagents invoked: 4
+  - PM: 1 invocation, duration: 45s
+  - Researcher: 2 invocations, avg duration: 12s
+  - Implementer: 1 invocation, duration: 120s
+
+Tool invocations: 23
+  - run_in_terminal: 8 (most common)
+  - editFiles: 6
+  - read_file: 5
+  - grep_search: 4
+
+Test runs: 3 (inferred from 'go test' commands)
+Lint runs: 2 (inferred from 'golangci-lint' commands)
+
+Timeline:
+  00:00 SubagentStart PM
+  00:45 SubagentStop PM
+  00:46 SubagentStart Researcher
+  00:58 SubagentStop Researcher
+  ...
+```
+
+The script computes durations by matching `SubagentStart`/`SubagentStop` pairs on `agent_id`. It counts tool invocations by `tool_name`. It infers test/lint runs by pattern-matching `tool_input` for known commands.
+
+### Things to try
+
+- Run a feature through your Exercise 5 workflow, then invoke `/workflow-stats` to see the metrics. Do the numbers make sense?
+- Compare two runs of the same feature. Are the agent invocation patterns consistent, or does the Coordinator make different decisions each time?
+- Look at the tool invocation breakdown. Is any agent making an unexpectedly high number of tool calls? That might indicate it's struggling or looping.
+- Check the timeline. Are there long gaps between events? That's the LLM thinking -- not captured in the log, but visible as dead time.
+
+### Design considerations
+
+- **Log rotation.** The JSONL file grows with every session. Should the logging script rotate it? A simple approach: rename the file with a timestamp at `SessionStart`.
+- **Privacy.** The log may contain file paths and command arguments. Is that acceptable for your team? Consider adding a `--redact` flag to the stats script that strips paths.
+- **Multiple sessions.** The `sessionId` field lets you filter by session. The stats script should accept an optional session ID argument, defaulting to the most recent session.
+- **Hook performance.** These hooks run on every tool invocation. They should be fast -- appending a line to a file is O(1), so this should not noticeably slow down the workflow. Avoid any network calls or heavy processing in the logging hooks.
+
+**Discussion:**
+- What metrics would actually change how you design your agents? If you discovered the Implementer averages 8 test runs per feature, would you change its instructions?
+- Could this observability data feed back into the Coordinator's instructions? (e.g., "If the Implementer has looped more than 5 times, escalate to the human.")
+- How would you compare this approach to simply reading the Chat Debug View? What does structured JSONL give you that the debug view doesn't?
